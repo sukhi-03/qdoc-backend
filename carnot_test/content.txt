@@ -1,0 +1,1145 @@
+Searching for Best Practices in Retrieval-Augmented
+Generation
+XiaohuaWang, ZhenghuaWang, XuanGao, FeiranZhang,
+YixinWu, ZhiboXu, TianyuanShi, ZhengyuanWang, ShizhengLi,
+QiQian, RuichengYin, ChangzeLv, XiaoqingZheng∗, XuanjingHuang
+SchoolofComputerScience,FudanUniversity,Shanghai,China
+ShanghaiKeyLaboratoryofIntelligentInformationProcessing
+{xiaohuawang22,zhenghuawang23}@m.fudan.edu.cn
+{zhengxq,xjhuang}@fudan.edu.cn
+Abstract
+Retrieval-augmented generation (RAG) techniques have proven to be effective
+in integrating up-to-date information, mitigating hallucinations, and enhancing
+responsequality,particularlyinspecializeddomains.WhilemanyRAGapproaches
+havebeenproposedtoenhancelargelanguagemodelsthroughquery-dependent
+retrievals, these approaches still suffer from their complex implementation and
+prolongedresponsetimes.Typically,aRAGworkflowinvolvesmultipleprocessing
+steps, each of which can be executed in various ways. Here, we investigate
+existing RAG approaches and their potential combinations to identify optimal
+RAG practices. Through extensive experiments, we suggest several strategies
+for deploying RAG that balance both performance and efficiency. Moreover,
+we demonstrate that multimodal retrieval techniques can significantly enhance
+question-answeringcapabilitiesaboutvisualinputsandacceleratethegeneration
+ofmultimodalcontentusinga“retrievalasgeneration”strategy. Resourcesare
+availableathttps://github.com/FudanDNN-NLP/RAG.
+1 Introduction
+Generativelargelanguagemodelsarepronetoproducingoutdatedinformationorfabricatingfacts,
+althoughtheywerealignedwithhumanpreferencesbyreinforcementlearning[1]orlightweight
+alternatives[2–5]. Retrieval-augmentedgeneration(RAG)techniquesaddresstheseissuesbycom-
+biningthestrengthsofpretrainingandretrieval-basedmodels,therebyprovidingarobustframework
+forenhancingmodelperformance[6]. Furthermore,RAGenablesrapiddeploymentofapplications
+forspecificorganizationsanddomainswithoutnecessitatingupdatestothemodelparameters,as
+longasquery-relateddocumentsareprovided.
+Many RAG approaches have been proposed to enhance large language models (LLMs) through
+query-dependentretrievals[6–8]. AtypicalRAGworkflowusuallycontainsmultipleintervening
+processingsteps: queryclassification(determiningwhetherretrievalisnecessaryforagiveninput
+query), retrieval (efficiently obtaining relevant documents for the query), reranking (refining the
+order of retrieved documents based on their relevance to the query), repacking (organizing the
+retrieved documents into a structured one for better generation), summarization (extracting key
+information for response generation from the repacked document and eliminating redundancies)
+modules. ImplementingRAGalsorequiresdecisionsonthewaystoproperlysplitdocumentsinto
+chunks,thetypesofembeddingstouseforsemanticallyrepresentingthesechunks,thechoiceof
+∗CorrespondingAuthor.
+Preprint.Underreview.
+4202
+luJ
+1
+]LC.sc[
+1v91210.7042:viXraEvaluation
+Large Language Model
+• G eneral Performance
+• Sp ecific Domains
+• R e trieval Capability Retrieval Source
+Query Classification Chunking
+Fine-tune
+• C hunking Size
+• D isturb • Sm all2big
+• R andom • Sl iding Windows
+• N o r mal Retrieval • C hunk Metadata
+• O riginal Query
+Summarization • BM 25 Embedding
+• C ontriever
+• Ex tractive • LL M-Embedder • LL M-Embedder
+• R ecomp • Q uery Rewriting • in tfloat/e5
+• BM 25 • Q uery Decomposition • BA AI/bge
+• Co ntriever • H yDE • Jin a-embeddings-v2
+• A bstractive • H ybrid Search • G te
+• Lo ngLLMlingua • H y DE+Hybrid Search • al l - m pnet-base-v2
+• Se lectiveContext
+• Re comp
+Reranking Vector Database
+Repacking • D LM-based • M ilvus
+• m onoT5 • Fa iss
+• Si des • m onoBERT • W eaviate
+• Fo rward • R ankLLaMA • Q drant
+• R e verse • TI LDE • C hroma
+Figure1: Retrieval-augmentedgenerationworkflow. Thisstudyinvestigatesthecontributionof
+eachcomponentandprovidesinsightsintooptimalRAGpracticesthroughextensiveexperimentation.
+Theoptionalmethodsconsideredforeachcomponentareindicatedinboldfonts,whilethemethods
+underlinedindicatethedefaultchoiceforindividualmodules. Themethodsindicatedinbluefont
+denotethebest-performingselectionsidentifiedempirically.
+vectordatabasestoefficientlystorefeaturerepresentations,andthemethodsforeffectivelyfine-tuning
+LLMs(seeFigure1).
+Whataddscomplexityandchallengeisthevariabilityinimplementingeachprocessingstep. For
+example, in retrieving relevant documents for an input query, various methods can be employed.
+One approach involves rewriting the query first and using the rewritten queries for retrieval [9].
+Alternatively, pseudo-responses to the query can be generated first, and the similarity between
+thesepseudo-responsesandthebackenddocumentscanbecomparedforretrieval[10]. Another
+option is to directly employ embedding models, typically trained in a contrastive manner using
+positiveandnegativequery-responsepairs[11,12]. Thetechniqueschosenforeachstepandtheir
+combinationssignificantlyimpactboththeeffectivenessandefficiencyofRAGsystems. Tothebest
+ofourknowledge,therehasbeennosystematicefforttopursuetheoptimalimplementationofRAG,
+particularlyfortheentireRAGworkflow.
+Inthisstudy,weaimtoidentifythebestpracticesforRAGthroughextensiveexperimentation. Given
+theinfeasibilityoftestingallpossiblecombinationsofthesemethods,weadoptathree-stepapproach
+toidentifyoptimalRAGpractices. First,wecomparerepresentativemethodsforeachRAGstep(or
+module)andselectuptothreeofthebest-performingmethods. Next,weevaluatetheimpactofeach
+methodontheoverallRAGperformancebytestingonemethodatatimeforanindividualstep,while
+keepingtheotherRAGmodulesunchanged. Thisallowsustodeterminethemosteffectivemethod
+foreachstepbasedonitscontributionandinteractionwithothermodulesduringresponsegeneration.
+Once the best method is chosen for a module, it is used in subsequent experiments. Finally, we
+empiricallyexploreafewpromisingcombinationssuitablefordifferentapplicationscenarioswhere
+efficiencymightbeprioritizedoverperformance,orviceversa. Basedonthesefindings,wesuggest
+severalstrategiesfordeployingRAGthatbalancebothperformanceandefficiency.
+Thecontributionsofthisstudyarethree-fold:
+• Throughextensiveexperimentation,wethoroughlyinvestigatedexistingRAGapproachesandtheir
+combinationstoidentifyandrecommendoptimalRAGpractices.
+2• We introduce a comprehensive framework of evaluation metrics and corresponding datasets to
+comprehensively assess the performance of retrieval-augmented generation models, covering
+general,specialized(ordomain-specific),andRAG-relatedcapabilities.
+• Wedemonstratethattheintegrationofmultimodalretrievaltechniquescansubstantiallyimprove
+question-answeringcapabilitiesonvisualinputsandspeedupthegenerationofmultimodalcontent
+throughastrategyof“retrievalasgeneration”.
+2 RelatedWork
+Ensuringthe accuracy ofresponses generatedby Large LanguageModels (LLMs) suchas Chat-
+GPT[13]andLLaMA[14]isessential.However,simplyenlargingmodelsizedoesnotfundamentally
+addresstheissueofhallucinations[15,16],especiallyinknowledge-intensivetasksandspecialized
+domains. Retrieval-augmentedgeneration(RAG)addressesthesechallengesbyretrievingrelevant
+documentsfromexternalknowledgebases,providingaccurate,real-time,domain-specificcontextto
+LLMs[6]. PreviousworkshaveoptimizedtheRAGpipelinethroughqueryandretrievaltransfor-
+mations,enhancingretrieverperformance,andfine-tuningboththeretrieverandgenerator. These
+optimizationsimprovetheinteractionbetweeninputqueries,retrievalmechanisms,andgeneration
+processes,ensuringtheaccuracyandrelevanceofresponses.
+2.1 QueryandRetrievalTransformation
+Effectiveretrievalrequiresqueriesaccurate,clear,anddetailed. Evenwhenconvertedintoembed-
+dings,semanticdifferencesbetweenqueriesandrelevantdocumentscanpersist. Previousworkshave
+exploredmethodstoenhancequeryinformationthroughquerytransformation,therebyimproving
+retrievalperformance. Forinstance,Query2Doc[17]andHyDE[10]generatepseudo-documents
+from original queries to enhance retrieval, while TOC [18] decomposes queries into subqueries,
+aggregatingtheretrievedcontentforfinalresults.
+Otherstudieshavefocusedontransformingretrievalsourcedocuments. LlamaIndex[19]providesan
+interfacetogeneratepseudo-queriesforretrievaldocuments,improvingmatchingwithrealqueries.
+Someworksemploycontrastivelearningtobringqueryanddocumentembeddingscloserinsemantic
+space [12, 20, 21]. Post-processing retrieved documents is another method to enhance generator
+output, with techniques like hierarchical prompt summarization [22] and using abstractive and
+extractivecompressors[23]toreducecontextlengthandremoveredundancy[24].
+2.2 RetrieverEnhancementStrategy
+Documentchunkingandembeddingmethodssignificantlyimpactretrievalperformance. Common
+chunking strategies divide documents into chunks, but determining optimal chunk length can be
+challenging. Smallchunksmayfragmentsentences, whilelargechunksmightincludeirrelevant
+context. LlamaIndex [19] optimizes the chunking method like Small2Big and sliding window.
+Retrieved chunks can be irrelevant and numbers can be large, so reranking is necessary to filter
+irrelevant documents. A common reranking approach employs deep language models such as
+BERT[25],T5[26],orLLaMA[27],whichrequiresslowinferencestepsduringrerankingbutgrants
+betterperformance. TILDE[28,29]achievesefficiencybyprecomputingandstoringthelikelihood
+ofqueryterms,rankingdocumentsbasedontheirsum.
+2.3 RetrieverandGeneratorFine-tuning
+Fine-tuningwithintheRAGframeworkiscrucialforoptimizingbothretrieversandgenerators. Some
+research focuses on fine-tuning the generator to better utilize retriever context [30–32], ensuring
+faithfulandrobustgeneratedcontent. Othersfine-tunetheretrievertolearntoretrievebeneficial
+passagesforthegenerator[33–35].HolisticapproachestreatRAGasanintegratedsystem,fine-tuning
+both retriever and generator together to enhance overall performance [36–38], despite increased
+complexityandintegrationchallenges.
+SeveralsurveyshaveextensivelydiscussedcurrentRAGsystems,coveringaspectsliketextgenera-
+tion[7,8],integrationwithLLMs[6,39],multimodal[40],andAI-generatedcontent[41]. While
+thesesurveysprovidecomprehensiveoverviewsofexistingRAGmethodologies,selectingtheappro-
+3Sufficient information
+No Retrieval Needed Need to Retrieval
+"To be, or not to be, that is the "The Renaissance was a
+question." cultural transformation in
+Please translate this sentence into European history, marking the
+French. < Translation > revival of arts, sciences, and Please give me a plan for holding a graduation party.
+humanistic thought. The < Planning >
+"Dave is attending his aunt's fervor of artists and scholars
+brother funeral today." propelled prosperity and
+P efa fr ea cp tih vr ea lys .e th e g i v e n <in Rfo er wm ra itt iio nn g > i a s n un n md o msv c a ai t e ri no y .cn e <i .n " S Ga ur i mvts e m, l m ait ree i r zaa a t tu ir oe n, > I w sf h aI o nw ut l a dton I t c dt ho ro it o vr s ea e v o te rhl tef ar c ko h em e aa L p po e las s ntA emn ? g o e d l e e s o ft < o t r DN an ee csw ip s o iY oro t nr a k t mi oa ann k,d i n I g >
+Tom has three sisters, and each
+sister has a brother. How many
+s <i b Rl ein ag sos na nre in t gh e >re in total? " OC ph ea nt AG IP ."T is a product of I r
+e
+e ah l ca a hd ti
+o
+oa tn hq s ehu ria .p r
+H
+r we ol i
+w
+tw h
+s
+i mt hh oy um b ly do yp
+I
+fa prr i eee rnn sd uts ,
+a
+b b de u ec t ma wu ys e e pg at eh rn ee u ny i tno se p tl op y o als coe cv em e
+p
+y
+t
+Please provide the ownership our relationship? < Suggestion >
+Identify who is football players: relationship.
+Messi, Jordan, Kobe. < Information extraction >
+< Closed QA > Which city will the next World Cup be held?
+< Search >
+Insufficient information
+"French.Washington played a Please find a novel that is as If you're currently a computer science student and your
+crucial role in the American famous as "One Hundred Years computer system encounters a malfunction, what should
+Revolutionary War, leading the of Solitude". < Search > you do? < Role-play >
+Continental Army against the
+British. "
+Please continue writing the Q: 3,1 A: 3 Q: 2,5 A: 5 Write an article about the geography of Europe, focusing
+above paragraph. Q: 5,7 A: ? on the changes in rainfall in the western part of the
+< Continuation writing > < In-context learning > country. < Writing >
+Background Knowledge No Background Knowledge
+Figure2: Classificationofretrievalrequirementsfordifferenttasks. Incaseswhereinformationis
+notprovided,wedifferentiatetasksbasedonthefunctionsofthemodel.
+priatealgorithmforpracticalimplementationremainschallenging. Inthispaper,wefocusonbest
+practicesforapplyingRAGmethods,advancingtheunderstandingandapplicationofRAGinLLMs.
+3 RAGWorkflow
+In this section, we detail the components of the RAG workflow. For each module, we review
+commonly used approaches and select the default and alternative methods for our final pipeline.
+Section4willdiscussbestpractices. Figure1presentstheworkflowandmethodsforeachmodule.
+Detailed experimental setups, including datasets, hyperparameters, and results are provided in
+AppendixA.
+3.1 QueryClassification
+Notallqueriesrequireretrieval-augmentedduetotheinherentcapabilitiesofLLMs. WhileRAGcan
+enhanceinformationaccuracyandreducehallucinations,frequentretrievalcanincreaseresponse
+time. Therefore, webeginbyclassifyingqueriestodeterminethenecessityofretrieval. Queries
+requiringretrievalproceedthroughtheRAGmodules;othersarehandleddirectlybyLLMs.
+Retrieval is generally recommended when knowledge beyond the model’s parameters is needed.
+However, the necessity of retrieval varies by task. For instance, an LLM trained up to 2023 can
+handleatranslationrequestfor“SorawasdevelopedbyOpenAI”withoutretrieval. Conversely,an
+introductionrequestforthesametopicwouldrequireretrievaltoproviderelevantinformation.
+Therefore,weproposeclassifyingtasksbytypetodetermineifaqueryneedsretrieval. Wecategorize
+15 tasks based on whether they provide suffi-
+cientinformation,withspecifictasksandexam-
+Metrics
+ples illustrated in Figure 2. For tasks entirely Model
+basedonuser-giveninformation,wedenoteas Acc Prec Rec F1
+“sufficient”,whichneednotretrieval;otherwise,
+BERT-base-multilingual 0.95 0.96 0.94 0.95
+wedenoteas“insufficient”,andretrievalmay
+benecessary. Wetrainaclassifiertoautomate Table1: ResultsoftheQueryClassifier.
+thisdecision-makingprocess. Experimentalde-
+tailsarepresentedinAppendixA.1. Section4
+explorestheimpactofqueryclassificationontheworkflow,comparingscenarioswithandwithout
+classification.
+4namespace-Pt/msmarco
+EmbeddingModel
+MRR@1 MRR@10 MRR@100 R@1 R@10 R@100
+BAAI/LLM-Embedder[20] 24.79 37.58 38.62 24.07 66.45 90.75
+BAAI/bge-base-en-v1.5[12] 23.34 35.80 36.94 22.63 64.12 90.13
+BAAI/bge-small-en-v1.5[12] 23.27 35.78 36.89 22.65 63.92 89.80
+BAAI/bge-large-en-v1.5[12] 24.63 37.48 38.59 23.91 65.57 90.60
+BAAI/bge-large-en[12] 24.84 37.66 38.73 24.13 66.09 90.64
+BAAI/bge-small-en[12] 23.28 35.79 36.91 22.62 63.96 89.67
+BAAI/bge-base-en[12] 23.47 35.94 37.07 22.73 64.17 90.14
+Alibaba-NLP/gte-large-en-v1.5[21] 8.93 15.60 16.71 8.67 32.28 60.36
+thenlper/gte-base[21] 7.42 13.23 14.30 7.21 28.27 56.20
+thenlper/gte-small[21] 7.97 14.81 15.95 7.71 32.07 61.08
+jinaai/jina-embeddings-v2-small-en[42] 8.07 15.02 16.12 7.87 32.55 60.36
+intfloat/e5-small-v2[11] 10.04 18.23 19.41 9.74 38.92 68.42
+intfloat/e5-large-v2[11] 9.58 17.94 19.03 9.35 39.00 66.11
+sentence-transformers/all-mpnet-base-v2 5.80 11.26 12.26 5.66 25.57 50.94
+Table2: Resultsfordifferentembeddingmodelsonnamespace-Pt/msmarco.
+3.2 Chunking
+Chunkingdocumentsintosmallersegmentsiscrucialforenhancingretrievalprecisionandavoiding
+lengthissuesinLLMs. Thisprocesscanbeappliedatvariouslevelsofgranularity,suchastoken,
+sentence,andsemanticlevels.
+• Token-levelChunkingisstraightforwardbutmaysplitsentences,affectingretrievalquality.
+• Semantic-level Chunking uses LLMs to determine breakpoints, context-preserving but time-
+consuming.
+• Sentence-levelChunkingbalancespreservingtextsemanticswithsimplicityandefficiency.
+Inthisstudy,weusesentence-levelchunking,balancingsimplicityandsemanticpreservation. We
+examinechunkingfromfourdimensions.
+3.2.1 ChunkSize
+Chunk size significantly impacts performance. Larger chunks provide more context, enhancing
+comprehensionbutincreasingprocesstime. Smallerchunksimproveretrievalrecallandreducetime
+butmaylacksufficientcontext.
+Findingtheoptimalchunksizeinvolvesabalancebetweensomemetricssuchasfaithfulness,and
+relevancy. Faithfulnessmeasureswhethertheresponseishallucinatedormatchestheretrievedtexts.
+Relevancymeasureswhethertheretrievedtexts
+and responses match queries. We use the
+lyft_2021
+evaluation module of LlamaIndex [43] to cal-
+culate the metrics above. For embedding, ChunkSize Average Average
+weusethetext-embedding-ada-0022 model, Faithfulness Relevancy
+2048 80.37 91.11
+which supports long input length. We choose
+1024 94.26 95.56
+zephyr-7b-alpha3 and gpt-3.5-turbo4 as
+512 97.59 97.41
+generationmodelandevaluationmodelrespec-
+256 97.22 97.78
+tively.Thesizeofthechunkoverlapis20tokens.
+128 95.74 97.22
+Firstsixtypagesofthedocumentlyft_20215
+are used as corpus, then prompting LLMs to Table3: Comparisonofdifferentchunksizes.
+generateaboutonehundredandseventyqueries
+accordingtochosencorpus. TheimpactofdifferentchunksizesisshowninTable3.
+2https://platform.openai.com/docs/guides/embeddings/embedding-models
+3https://huggingface.co/HuggingFaceH4/zephyr-7b-alpha
+4https://www.openai.com/
+5https://raw.githubusercontent.com/run-llama/llama_index/main/docs/docs/examples/
+data/10k/lyft_2021.pdf
+53.2.2 ChunkingTechniques
+Advancedtechniquessuchassmall-to-bigandslidingwindowimproveretrievalqualitybyorganizing
+chunk block relationships. Small-sized blocks are used to match queries, and larger blocks that
+includethesmallonesalongwithcontextualinformationarereturned.
+Todemonstratetheeffectivenessofadvancedchunkingtechniques,weusetheLLM-Embedder[20]
+modelasanembeddingmodel. Thesmallerchunksizeis175tokens,thelargerchunksizeis512
+tokensandthechunkoverlapis20tokens. Techniqueslikesmall-to-bigandslidingwindowimprove
+retrieval quality by maintaining context and ensuring relevant information is retrieved. Detailed
+resultsareshowninTable4.
+3.2.3 EmbeddingModelSelection
+Choosing the right embedding model is crucial for effective semantic matching of queries
+and chunk blocks. We use the evaluation module of FlagEmbedding6 which uses the dataset
+namespace-Pt/msmarco7 as queries and
+dataset namespace-Pt/msmarco-corpus8 as
+lyft_2021
+corpus to choose the appropriate open source
+embedding model. As shown in Table 2, ChunkSkill Average Average
+Faithfulness Relevancy
+LLM-Embedder [20] achieves comparable
+Original 95.74 95.37
+resultswithBAAI/bge-large-en[12],however,
+small2big 96.67 95.37
+the size of the former is three times smaller
+slidingwindow 97.41 96.85
+than that of the latter. Thus, we select the
+LLM-Embedder [20] for its balance of Table4: Comparisonofdifferentchunkskills.
+performanceandsize.
+3.2.4 MetadataAddition
+Enhancingchunkblockswithmetadataliketitles,keywords,andhypotheticalquestionscanimprove
+retrieval, provide more ways to post-process retrieved texts, and help LLMs better understand
+retrievedinformation. Adetailedstudyonmetadatainclusionwillbeaddressedinfuturework.
+3.3 VectorDatabases
+Vectordatabasesstoreembeddingvectorswiththeirmetadata,enablingefficientretrievalofdoc-
+uments relevant to queries through various indexing and approximate nearest neighbor (ANN)
+methods.
+To select an appropriate vector database for our research, we evaluated several options based on
+fourkeycriteria: multipleindextypes,billion-scalevectorsupport,hybridsearch,andcloud-native
+capabilities. Thesecriteriawerechosenfortheir
+impact on flexibility, scalability, and ease of Multiple Billion- Hybrid Cloud-
+deploymentinmodern,cloud-basedinfrastruc- Database IndexType Scale Search Native
+tures. Multipleindextypesprovidetheflexibil- Weaviate ✗ ✗ ✓ ✓
+itytooptimizesearchesbasedondifferentdata Faiss ✓ ✗ ✗ ✗
+characteristicsandusecases. Billion-scalevec- Chroma ✗ ✗ ✓ ✓
+torsupportiscrucialforhandlinglargedatasets Qdrant ✗ ✓ ✓ ✓
+inLLMapplications. Hybridsearchcombines Milvus ✓ ✓ ✓ ✓
+vectorsearchwithtraditionalkeywordsearch,
+Table5: ComparisonofVariousVectorDatabases
+enhancing retrieval accuracy. Finally, cloud-
+nativecapabilitiesensureseamlessintegration,scalability,andmanagementincloudenvironments.
+Table 5 presents a detailed comparison of five open-source vector databases: Weaviate, Faiss,
+Chroma,Qdrant,andMilvus.
+Our evaluation indicates that Milvus stands out as the most comprehensive solution among the
+databasesevaluated,meetingalltheessentialcriteriaandoutperformingotheropen-sourceoptions.
+6https://github.com/FlagOpen/FlagEmbedding
+7https://huggingface.co/datasets/namespace-Pt/msmarco
+8https://huggingface.co/datasets/namespace-Pt/msmarco-corpus
+6TRECDL19 TRECDL20
+Method
+mAP nDCG@10 R@50 R@1k Latency mAP nDCG@10 R@50 R@1k Latency
+unsupervised
+BM25 30.13 50.58 38.32 75.01 0.07 28.56 47.96 46.18 78.63 0.29
+Contriever 23.99 44.54 37.54 74.59 3.06 23.98 42.13 43.81 75.39 0.98
+supervised
+LLM-Embedder 44.66 70.20 49.06 84.48 2.61 45.60 68.76 61.36 84.41 0.71
++QueryRewriting 44.56 67.89 51.45 85.35 7.80 45.16 65.62 59.63 83.45 2.06
++QueryDecomposition 41.93 66.10 48.66 82.62 14.98 43.30 64.95 57.74 84.18 2.01
++HyDE 50.87 75.44 54.93 88.76 7.21 50.94 73.94 63.80 88.03 2.14
++HybridSearch 47.14 72.50 51.13 89.08 3.20 47.72 69.80 64.32 88.04 0.77
++HyDE+HybridSearch 52.13 73.34 55.38 90.42 11.16 53.13 72.72 66.14 90.67 2.95
+Table6: ResultsfordifferentretrievalmethodsonTRECDL19/20. Thebestresultforeachmethod
+ismadeboldandthesecondisunderlined.
+TRECDL19 TRECDL20
+Configuration
+mAP nDCG@10 R@50 R@1k latency mAP nDCG@10 R@50 R@1k Latency
+HyDE
+w/1pseudo-doc 48.77 72.49 53.20 87.73 8.08 51.31 70.37 63.28 87.81 2.09
+w/1pseudo-doc+query 50.87 75.44 54.93 88.76 7.21 50.94 73.94 63.80 88.03 2.14
+w/8pseudo-doc+query 51.64 75.12 54.51 89.17 14.15 53.14 73.65 65.79 88.67 3.44
+Table7: HyDEwithdifferentconcatenationofhypotheticaldocumentsandqueries.
+3.4 RetrievalMethods
+Givenauserquery,theretrievalmoduleselectsthetop-krelevantdocumentsfromapre-builtcorpus
+based on the similarity between the query and the documents. The generation model then uses
+thesedocumentstoformulateanappropriateresponsetothequery. However,originalqueriesoften
+underperformduetopoorexpressionandlackofsemanticinformation[6],negativelyimpactingthe
+retrievalprocess. Toaddresstheseissues,weevaluatedthreequerytransformationmethodsusingthe
+LLM-EmbedderrecommendedinSection3.2asthequeryanddocumentencoder:
+• QueryRewriting: Queryrewritingrefinesqueriestobettermatchrelevantdocuments. Inspired
+bytheRewrite-Retrieve-Readframework[9],wepromptanLLMtorewritequeriestoenhance
+performance.
+• Query Decomposition: This approach involves retrieving documents based on sub-questions
+derivedfromtheoriginalquery,whichismorecomplextocomprehendandhandle.
+• Pseudo-documentsGeneration: Thisapproachgeneratesahypotheticaldocumentbasedonthe
+userqueryandusestheembeddingofhypotheticalanswerstoretrievesimilardocuments. One
+notableimplementisHyDE[10],
+Recentstudies,suchas[44],indicatethatcombininglexical-basedsearchwithvectorsearchsignifi-
+cantlyenhancesperformance. Inthisstudy,weuseBM25forsparseretrievalandContriever[45],an
+unsupervisedcontrastiveencoder,fordenseretrieval,servingastworobustbaselinesbasedonThakur
+etal.[46].
+3.4.1 Resultsfordifferentretrievalmethods
+WeevaluatedtheperformanceofdifferentsearchmethodsontheTRECDL2019and2020passage
+ranking datasets. The results presented in Table 6 show that supervised methods significantly
+outperformedunsupervisedmethods. CombiningwithHyDEandhybridsearch,LLM-Embedder
+achievesthehighestscores. However,queryrewritingandquerydecompositiondidnotenhance
+retrieval performance as effectively. Considering the best performance and tolerated latency, we
+recommend HybridSearchwithHyDE as the default retrieval method. Taking efficiency into
+consideration, Hybrid Search combines sparse retrieval (BM25) and dense retrieval (Original
+embedding)andachievesnotableperformancewithrelativelylowlatency.
+3.4.2 HyDEwithDifferentConcatenationofDocumentsandQuery
+Table7showstheimpactofdifferentconcatenationstrategiesforhypotheticaldocumentsandqueries
+usingHyDE.Concatenatingmultiplepseudo-documentswiththeoriginalquerycansignificantly
+7TRECDL19 TRECDL20
+Hyperparameter
+mAP nDCG@10 R@50 R@1k latency mAP nDCG@10 R@50 R@1k Latency
+HybridSearch
+α=0.1 46.00 70.87 49.24 88.89 2.98 46.54 69.05 63.36 87.32 0.90
+α=0.3 47.14 72.50 51.13 89.08 3.20 47.72 69.80 64.32 88.04 0.77
+α=0.5 47.36 72.24 52.71 88.09 3.02 47.19 68.12 64.90 87.86 0.87
+α=0.7 47.21 71.89 52.40 88.01 3.15 45.82 67.30 64.23 87.92 1.02
+α=0.9 46.35 70.67 52.64 88.22 2.74 44.02 65.55 63.22 87.76 1.20
+Table8: Resultsofhybridsearchwithdifferentalphavalues.
+MSMARCOPassageranking
+Method
+BaseModel #Params MRR@1 MRR@10 MRR@1k HitRate@10 Latency
+w/oReranking
+RandomOrdering - - 0.011 0.027 0.068 0.092 -
+BM25 - - 6.52 11.65 12.59 24.63 -
+DLMReranking
+monoT5 T5-base 220M 21.62 31.78 32.40 54.07 4.5
+monoBERT BERT-large 340M 21.65 31.69 32.35 53.38 15.8
+RankLLaMA Llama-2-7b 7B 22.08 32.35 32.97 54.53 82.4
+TILDEReranking
+TILDEv2 BERT-base 110M 18.57 27.83 28.60 49.07 0.02
+Table9: ResultsofdifferentrerankingmethodsonthedevsetoftheMSMARCOPassageranking
+dataset. Foreachquery,thetop-1000candidatepassagesretrievedbyBM25arereranked. Latencyis
+measuredinsecondsperquery.
+enhanceretrievalperformance,thoughatthecostofincreasedlatency,suggestingatrade-offbetween
+retrievaleffectivenessandefficiency.However,indiscriminatelyincreasingthenumberofhypothetical
+documentsdoesnotyieldsignificantbenefitsandsubstantiallyraiseslatency,indicatingthatusinga
+singlehypotheticaldocumentissufficient.
+3.4.3 HybridSearchwithDifferentWeightonSparseRetrieval
+Table8presentstheimpactofdifferentαvaluesinhybridsearch,whereαcontrolstheweighting
+betweensparseretrievalanddenseretrievalcomponents. Therelevancescoreiscalculatedasfollows:
+S =α·S +S (1)
+h s d
+whereS ,S arethenormalizedrelevancescoresfromsparseretrievalanddenseretrievalrespectively,
+s d
+andS isthetotalretrievalscore.
+h
+Weevaluatedfivedifferentαvaluestodeterminetheirinfluenceonperformance. Theresultsindicate
+thatan α value of0.3yields thebestperformance, demonstrating that appropriateadjustmentof
+αcanenhanceretrievaleffectivenesstoacertainextent. Therefore, weselectedα = 0.3forour
+retrievalandmainexperiments. AdditionalimplementationdetailsarepresentedinAppendixA.2.
+3.5 RerankingMethods
+Aftertheinitialretrieval,arerankingphaseisemployedtoenhancetherelevanceoftheretrieved
+documents,ensuringthatthemostpertinentinformationappearsatthetopofthelist. Thisphaseuses
+morepreciseandtime-intensivemethodstoreorderdocumentseffectively,increasingthesimilarity
+betweenthequeryandthetop-rankeddocuments.
+We consider two approaches in our reranking module: DLM Reranking, which utilizes classifi-
+cation,andTILDEReranking,whichfocusesonquerylikelihoods. Theseapproachesprioritize
+performanceandefficiency,respectively.
+• DLMReranking: Thismethodleveragesdeeplanguagemodels(DLMs)[25–27]forreranking.
+Thesemodelsarefine-tunedtoclassifydocumentrelevancytoaqueryas“true”or“false”. During
+fine-tuning,themodelistrainedwithconcatenatedqueryanddocumentinputs,labeledbyrelevancy.
+Atinference,documentsarerankedbasedontheprobabilityofthe“true”token.
+• TILDEReranking: TILDE[28,29]calculatesthelikelihoodofeachquerytermindependently
+bypredictingtokenprobabilitiesacrossthemodel’svocabulary. Documentsarescoredbysumming
+8NQ TQA HotPotQA
+Method Avg. Avg.Token
+F1 #token F1 #token F1 #token
+w/oSummarization
+OriginPrompt 27.07 124 33.61 152 33.92 141 31.53 139
+ExtractiveMethod
+BM25 27.97 40 32.44 59 28.00 63 29.47 54
+Contriever 23.62 42 33.79 65 23.64 60 27.02 56
+Recomp(extractive) 27.84 34 35.32 60 29.46 58 30.87 51
+AbstractiveMethod
+SelectiveContext 25.05 65 34.25 70 34.43 66 31.24 67
+LongLLMlingua 21.32 51 32.81 56 30.79 57 28.29 55
+Recomp(abstractive) 33.68 59 35.87 61 29.01 57 32.85 59
+Table10: Comparisonbetweendifferentsummarizationmethods.
+the pre-calculated log probabilities of query tokens, allowing for rapid reranking at inference.
+TILDEv2improvesthisbyindexingonlydocument-presenttokens,usingNCEloss,andexpanding
+documents,thusenhancingefficiencyandreducingindexsize.
+OurexperimentswereconductedontheMSMARCOPassagerankingdataset[47],alarge-scale
+datasetformachinereadingcomprehension.Wefollowandmakemodificationstotheimplementation
+providedbyPyGaggle[26]andTILDE[28],usingthemodelsmonoT5,monoBERT,RankLLaMA
+andTILDEv2. RerankingresultsareshowninTable9. WerecommendmonoT5asacomprehensive
+method balancing performance and efficiency. RankLLaMA is suitable for achieving the best
+performance,whileTILDEv2isidealforthequickestexperienceonafixedcollection. Detailson
+theexperimentalsetupandresultsarepresentedinAppendixA.3.
+3.6 DocumentRepacking
+Theperformanceofsubsequentprocesses,suchasLLMresponsegeneration,maybeaffectedbythe
+orderdocumentsareprovided. Toaddressthisissue,weincorporateacompactrepackingmoduleinto
+theworkflowafterreranking,featuringthreerepackingmethods: “forward”,“reverse”and“sides”.
+The“forward”methodrepacksdocumentsbydescendingrelevancyscoresfromthererankingphase,
+whereasthe“reverse”arrangestheminascendingorder. InspiredbyLiuetal.[48],concludingthat
+optimalperformanceisachievedwhenrelevantinformationisplacedattheheadortailoftheinput,
+wealsoincludea“sides”option.
+Since the repacking method primarily affects subsequent modules, we select the best repacking
+methodinSection4bytestingitincombinationwithothermodules. Inthissection,wechoosethe
+“sides”methodasthedefaultrepackingmethod.
+3.7 Summarization
+Retrievalresultsmaycontainredundantorunnecessaryinformation,potentiallypreventingLLMs
+fromgeneratingaccurateresponses. Additionally,longpromptscanslowdowntheinferenceprocess.
+Therefore,efficientmethodstosummarizeretrieveddocumentsarecrucialintheRAGpipeline.
+Summarizationtaskscanbeextractiveorabstractive. Extractivemethodssegmenttextintosen-
+tences,thenscoreandrankthembasedonimportance. Abstractivecompressorssynthesizeinfor-
+mationfrommultipledocumentstorephraseandgenerateacohesivesummary. Thesetaskscanbe
+query-basedornon-query-based. Inthispaper,asRAGretrievesinformationrelevanttoqueries,we
+focusexclusivelyonquery-basedmethods.
+• Recomp: Recomp[23]hasextractiveandabstractivecompressors. Theextractivecompressor
+selectsusefulsentences,whiletheabstractivecompressorsynthesizesinformationfrommultiple
+documents.
+• LongLLMLingua: LongLLMLingua[49]improvesLLMLinguabyfocusingonkeyinforma-
+tionrelatedtothequery.
+• Selective Context SelectiveContextenhances LLM efficiency byidentifying andremoving
+redundantinformationintheinputcontext. Itevaluatestheinformativenessoflexicalunitsusing
+9self-informationcomputedbyabasecausallanguagemodel. Thismethodisnon-query-based,
+allowingacomparisonbetweenquery-basedandnon-query-basedapproaches.
+Weevaluatethesemethodsonthreebenchmarkdatasets:NQ,TriviaQA,andHotpotQA.Comparative
+results of different summarization methods are shown in Table 10. We recommend Recomp for
+its outstanding performance. LongLLMLingua does not perform well but demonstrates better
+generalizationcapabilitiesasitwasnottrainedontheseexperimentaldatasets.Therefore,weconsider
+itasanalternativemethod. Additionalimplementationdetailsanddiscussionsonnon-query-based
+methodsareprovidedinAppendixA.4.
+3.8 GeneratorFine-tuning
+Inthissection,wefocusonfine-tuningthegeneratorwhileleavingretrieverfine-tuningforfuture
+exploration. Weaimtoinvestigatetheimpactoffine-tuning,particularlytheinfluenceofrelevantor
+irrelevantcontextsonthegenerator’sperformance.
+Formally,wedenotexasthequeryfedintotheRAGsystem,andDasthecontextsforthisinput.
+Thefine-tuninglossofthegeneratoristhenegativelog-likelihoodoftheground-truthoutputy.
+Toexploretheimpactoffine-tuning,especiallyrelevantandirrelevantcontexts,wedefined asa
+gold
+contextrelevanttothequery,andd asarandomlyretrievedcontext. Wetrainthemodelby
+random
+varyingthecompositionofDasfollows:
+• D : Theaugmentedcontextconsistsofquery-relevantdocuments,denotedasD ={d }.
+g g gold
+• D : Thecontextcontainsonerandomlysampleddocument,denotedasD ={d }.
+r r random
+• D : Theaugmentedcontextcomprisesarelevantdocumentandarandomly-selectedone,denoted
+gr
+asD ={d ,d }.
+gr gold random
+• D : The augmented context consists of two copies of a query-relevant document, denoted as
+gg
+D ={d ,d }.
+gg gold gold
+We denote the base LM generator not fine-tuned as M , and the model fine-tuned under the
+b
+corresponding D as M , M , M , M . We fine-tuned our model on several QA and reading
+g r gr gg
+100
+80
+60
+40
+20
+0
+           
+      ȱ        
+comprehensiondatasets. Ground-truthcoverage
+isusedasourevaluationmetricsinceQAtask
+       ȱ        ȱ      ȱ          ȱ      
+answersarerelativelyshort. WeselectLlama-2-          
+7B[50]asthebasemodel. Similartotraining,       
+weevaluatealltrainedmodelsonvalidationsets
+withD g,D r,D gr,andD∅,whereD∅indicates
+inference without retrieval. Figure 3 presents
+ourmainresults. Modelstrainedwithamixof
+relevantandrandomdocuments(M )perform
+gr
+bestwhenprovidedwitheithergoldormixed
+contexts. Thissuggeststhatmixingrelevantand
+randomcontextsduringtrainingcanenhancethe
+generator’srobustnesstoirrelevantinformation
+whileensuringeffectiveutilizationofrelevant Figure3: Resultsofgeneratorfine-tuning.
+contexts. Therefore,weidentifythepracticeof
+augmenting with a few relevantandrandomly-selected documentsduringtraining as the best
+approach. Detaileddatasetinformation,hyperparametersandexperimentalresultscanbefoundin
+AppendixA.5.
+4 SearchingforBestRAGPractices
+In the following section, we investigate the optimal practices for implementing RAG. To begin
+with,weusedthedefaultpracticeidentifiedinSection3foreachmodule. Followingtheworkflow
+depictedinFigure1,wesequentiallyoptimizedindividualmodulesandselectedthemosteffective
+optionamongalternatives. Thisiterativeprocesscontinueduntilwedeterminedthebestmethodfor
+implementingthefinalsummarizationmodule. BasedonSection3.8,weusedtheLlama2-7B-Chat
+modelfine-tunedwhereeachquerywasaugmentedbyafewrandom-selectedandrelevantdocuments
+10Commonsense FactCheck ODQA Multihop Medical RAG Avg.
+Method
+Acc Acc EM F1 EM F1 Acc Score Score F1 Latency
+classificationmodule ,HybridwithHyDE,monoT5,sides,Recomp
+w/oclassification 0.719 0.505 0.391 0.450 0.212 0.255 0.528 0.540 0.465 0.353 16.58
++classification 0.727 0.595 0.393 0.450 0.207 0.257 0.460 0.580 0.478 0.353 11.71
+withclassification, retrievalmodule ,monoT5,sides,Recomp
++HyDE 0.718 0.595 0.320 0.373 0.170 0.213 0.400 0.545 0.443 0.293 11.58
++Original 0.721 0.585 0.300 0.350 0.153 0.197 0.390 0.486 0.428 0.273 1.44
++Hybrid 0.718 0.595 0.347 0.397 0.190 0.240 0.750 0.498 0.477 0.318 1.45
++HybridwithHyDE 0.727 0.595 0.393 0.450 0.207 0.257 0.460 0.580 0.478 0.353 11.71
+withclassification,HybridwithHyDE, rerankingmodule ,sides,Recomp
+w/oreranking 0.720 0.591 0.365 0.429 0.211 0.260 0.512 0.530 0.470 0.334 10.31
++monoT5 0.727 0.595 0.393 0.450 0.207 0.257 0.460 0.580 0.478 0.353 11.71
++monoBERT 0.723 0.593 0.383 0.443 0.217 0.259 0.482 0.551 0.475 0.351 11.65
++RankLLaMA 0.723 0.597 0.382 0.443 0.197 0.240 0.454 0.558 0.470 0.342 13.51
++TILDEv2 0.725 0.588 0.394 0.456 0.209 0.255 0.486 0.536 0.476 0.355 11.26
+withclassification,HybridwithHyDE,monoT5, repackingmodule ,Recomp
++sides 0.727 0.595 0.393 0.450 0.207 0.257 0.460 0.580 0.478 0.353 11.71
++forward 0.722 0.599 0.379 0.437 0.215 0.260 0.472 0.542 0.474 0.349 11.68
++reverse 0.728 0.592 0.387 0.445 0.219 0.263 0.532 0.560 0.483 0.354 11.70
+withclassification,HybridwithHyDE,monoT5,reverse, summarizationmodule
+w/osummarization 0.729 0.591 0.402 0.457 0.205 0.252 0.528 0.533 0.480 0.355 10.97
++Recomp 0.728 0.592 0.387 0.445 0.219 0.263 0.532 0.560 0.483 0.354 11.70
++LongLLMLingua 0.713 0.581 0.362 0.423 0.199 0.245 0.530 0.539 0.466 0.334 16.17
+Table11: ResultsofthesearchforoptimalRAGpractices. Modulesenclosedina boxedmodule
+areunderinvestigationtodeterminethebestmethod.Theunderlinedmethodrepresentstheselected
+implementation. The“Avg”(averagescore)iscalculatedbasedontheAcc,EM,andRAGscoresfor
+alltasks,whiletheaveragelatencyismeasuredinsecondsperquery. Thebestscoresarehighlighted
+inbold.
+asthegenerator. WeusedMilvustobuildavectordatabasethatincludes10milliontextofEnglish
+Wikipediaand4milliontextofmedicaldata. WealsoinvestigatedtheimpactofremovingtheQuery
+Classification,Reranking,andSummarizationmodulestoassesstheircontributions.
+4.1 ComprehensiveEvaluation
+We conducted extensive experiments across various NLP tasks and datasets to assess the perfor-
+mance of RAG systems. Specifically: (I) Commonsense Reasoning; (II) Fact Checking; (III)
+Open-Domain QA; (IV) MultiHop QA; (V) Medical QA. For further details on the tasks and
+theircorrespondingdatasets, pleaserefertoAppendixA.6. Furthermore, weevaluatedtheRAG
+capabilitiesonsubsetsextractedfromthesedatasets,employingthemetricsrecommendedinRA-
+GAs[51],includingFaithfulness,ContextRelevancy,AnswerRelevancy,andAnswerCorrectness.
+Additionally,wemeasuredRetrievalSimilaritybycomputingthecosinesimilaritybetweenretrieved
+documentsandgolddocuments.
+WeusedaccuracyastheevaluationmetricforthetasksofCommonsenseReasoning,FactChecking,
+andMedicalQA.ForOpen-DomainQAandMultihopQA,weemployedtoken-levelF1scoreand
+ExactMatch(EM)score. ThefinalRAGscorewascalculatedbyaveragingtheaforementionedfive
+RAGcapabilities. WefollowedTrivedietal.[52]andsub-sampledupto500examplesfromeach
+dataset.
+4.2 ResultsandAnalysis
+BasedontheexperimentalresultspresentedinTable11,thefollowingkeyinsightsemerge:
+• QueryClassificationModule: Thismoduleisreferencedandcontributestobotheffectiveness
+andefficiency,leadingtoanaverageimprovementintheoverallscorefrom0.428to0.443anda
+reductioninlatencytimefrom16.41to11.58secondsperquery.
+11• RetrievalModule: Whilethe“HybridwithHyDE”methodattainedthehighestRAGscoreof
+0.58,itdoessoataconsiderablecomputationalcostwith11.71secondperquery. Consequently,
+the“Hybrid”or“Original”methodsarerecommended,astheyreducelatencywhilemaintaining
+comparableperformance.
+• RerankingModule: Theabsenceofarerankingmoduleledtoanoticeabledropinperformance,
+highlightingitsnecessity. MonoT5achievedthehighestaveragescore,affirmingitsefficacyin
+augmentingtherelevanceofretrieveddocuments. Thisindicatesthecriticalroleofrerankingin
+enhancingthequalityofgeneratedresponses.
+• Repacking Module: The Reverse configuration exhibited superior performance, achieving an
+RAGscoreof0.560. Thisindicatesthatpositioningmorerelevantcontextclosertothequeryleads
+tooptimaloutcomes.
+• SummarizationModule: Recompdemonstratedsuperiorperformance,althoughachievingcompa-
+rableresultswithlowerlatencywaspossiblebyremovingthesummarizationmodule. Nevertheless,
+Recompremainsthepreferredchoiceduetoitscapabilitytoaddressthegenerator’smaximum
+lengthconstraints. Intime-sensitiveapplications,removingsummarizationcouldeffectivelyreduce
+responsetime.
+Theexperimentalresultsdemonstratethateachmodulecontributesuniquelytotheoverallperfor-
+manceoftheRAGsystem. Thequeryclassificationmoduleenhancesaccuracyandreduceslatency,
+whiletheretrievalandrerankingmodulessignificantlyimprovethesystem’sabilitytohandlediverse
+queries. The repacking and summarization modules further refine the system’s output, ensuring
+high-qualityresponsesacrossdifferenttasks.
+5 Discussion
+5.1 BestPracticesforImplementingRAG
+Accordingtoourexperimentalfindings,wesuggesttwodistinctrecipesorpracticesforimplementing
+RAG systems, each customized to address specific requirements: one focusing on maximizing
+performance,andtheotheronstrikingabalancebetweenefficiencyandefficacy.
+BestPerformancePractice: Toachievethehighestperformance,itisrecommendedtoincorporate
+queryclassificationmodule,usethe“HybridwithHyDE”methodforretrieval,employmonoT5for
+reranking,optforReverseforrepacking,andleverageRecompforsummarization. Thisconfiguration
+yieldedthehighestaveragescoreof0.483,albeitwithacomputationally-intensiveprocess.
+BalancedEfficiencyPractice: Inordertoachieveabalancebetweenperformanceandefficiency,
+itisrecommendedtoincorporatethequeryclassificationmodule, implementtheHybridmethod
+forretrieval,useTILDEv2forreranking,optforReverseforrepacking,andemployRecompfor
+summarization. Giventhattheretrievalmoduleaccountsforthemajorityofprocessingtimeinthe
+system,transitioningtotheHybridmethodwhilekeepingothermodulesunchangedcansubstantially
+reducelatencywhilepreservingacomparableperformance.
+5.2 MultimodalExtension
+WehaveextendedRAGtomultimodalapplications. Specifically,wehaveincorporatedtext2image
+andimage2textretrievalcapabilitiesintothesystemwithasubstantialcollectionofpairedimageand
+textualdescriptionsasaretrievalsource. AsdepictedinFigure4,thetext2imagecapabilityspeeds
+uptheimagegenerationprocesswhenauserqueryalignswellwiththetextualdescriptionsofstored
+images(i.e.,“retrievalasgeneration”strategy),whiletheimage2textfunctionalitycomesintoplay
+whenauserprovidesanimageandengagesinconversationabouttheinputimage. Thesemultimodal
+RAGcapabilitiesofferthefollowingadvantages:
+• Groundedness:Retrievalmethodsprovideinformationfromverifiedmultimodalmaterials,thereby
+ensuringauthenticityandspecificity. Incontrast,on-the-flygenerationreliesonmodelstogenerate
+newcontent,whichcanoccasionallyresultinfactualerrorsorinaccuracies.
+• Efficiency: Retrievalmethodsaretypicallymoreefficient,especiallywhentheansweralready
+exists in stored materials. Conversely, generation methods may require more computational
+resourcestoproducenewcontent,particularlyforimagesorlengthytexts.
+12Text2image Retrieval
+Retrieval
+A dog is sleeping
+Retrieval
+A dog is sleeping
+Image2text Retrieval
+Retrieval
+A dog is sleeping.
+A dog is drinking water
+Retrieval User Query
+Low Similarity
+High Similarity
+Image Generation Model
+A dog is sleeping
+Image Caption Model
+Figure4: Workflowofmultimodalretrieval. Theuppersectionillustratesthetext-to-imageretrieval
+process. Initially,atextqueryisusedtofindimagesinthedatabasewiththehighestsimilarity. Ifa
+highsimilarityisfound,theimageisreturneddirectly. Ifnot,animagegenerationmodelisemployed
+tocreateandreturnanappropriateimage. Thelowersectiondemonstratestheimage-to-textretrieval
+process. Here, auser-providedimageismatchedwithimagesinthedatabasetofindthehighest
+similarity. Ifahighsimilarityisidentified,thepre-storedcaptionofthematchingimageisreturned.
+Otherwise,animagecaptioningmodelgeneratesandreturnsanewcaption.
+• Maintainability: Generationmodelsoftennecessitatecarefulfine-tuningtotailorthemfornew
+applications. Incontrast,retrieval-basedmethodscanbeimprovedtoaddressnewdemandsby
+simplyenlargingthesizeandenhancingthequalityofretrievalsources.
+Weplantobroadentheapplicationofthisstrategytoincludeothermodalities,suchasvideoand
+speech,whilealsoexploringefficientandeffectivecross-modalretrievaltechniques.
+6 Conclusion
+Inthisstudy,weaimtoidentifyoptimalpracticesforimplementingretrieval-augmentedgeneration
+inordertoimprovethequalityandreliabilityofcontentproducedbylargelanguagemodels. We
+systematicallyassessedarangeofpotentialsolutionsforeachmodulewithintheRAGframework
+and recommended the most effective approach for each module. Furthermore, we introduced a
+comprehensive evaluation benchmark for RAG systems and conducted extensive experiments to
+determinethebestpracticesamongvariousalternatives. Ourfindingsnotonlycontributetoadeeper
+understandingofretrieval-augmentedgenerationsystemsbutalsoestablishafoundationforfuture
+research.
+Limitations
+Wehaveevaluatedtheimpactofvariousmethodsforfine-tuningLLMgenerators. Previousstudies
+have demonstrated the feasibility of training both the retriever and generator jointly. We would
+liketoexplorethispossibilityinthefuture. Inthisstudy, weembracedtheprincipleofmodular
+13designtosimplifythesearchforoptimalRAGimplementations,therebyreducingcomplexity. Due
+tothedauntingcostsassociatedwithconstructingvectordatabasesandconductingexperiments,our
+evaluationwaslimitedtoinvestigatingtheeffectivenessandinfluenceofrepresentativechunking
+techniques within the chunking module. It would be intriguing to further explore the impact of
+differentchunkingtechniquesontheentireRAGsystems. Whilewehavediscussedtheapplicationof
+RAGinthedomainofNLPandextendeditsscopetoimagegeneration,anenticingavenueforfuture
+explorationwouldinvolveexpandingthisresearchtoothermodalitiessuchasspeechandvideo.
+Acknowledgments
+Theauthorswouldliketothanktheanonymousreviewersfortheirvaluablecomments. Thiswork
+wassupportedbyNationalNaturalScienceFoundationofChina(No. 62076068).
+References
+[1] LongOuyang,JeffWu,XuJiang,DiogoAlmeida,CarrollL.Wainwright,PamelaMishkin,
+ChongZhang,SandhiniAgarwal,KatarinaSlama,AlexRay,JohnSchulman,JacobHilton,
+FraserKelton,LukeMiller,MaddieSimens,AmandaAskell,PeterWelinder,PaulChristiano,
+Jan Leike, and Ryan Lowe. Training language models to follow instructions with human
+feedback.InProceedingsoftheConferenceonNeuralInformationProcessingSystems(NeurIPS
+2022),2022.
+[2] RafaelRafailov,ArchitSharma,EricMitchell,StefanoErmon,ChristopherDManning,and
+ChelseaFinn. Directpreferenceoptimization: Yourlanguagemodelissecretlyarewardmodel.
+arXivpreprintarXiv:2305.18290,2023.
+[3] YaoZhao,RishabhJoshi,TianqiLiu,MishaKhalman,MohammadSaleh,andPeterJLiu.SLIC-
+HF:Sequencelikelihoodcalibrationwithhumanfeedback. arXivpreprintarXiv:2305.10425,
+2023.
+[4] ZhengYuan,HongyiYuan,ChuanqiTan,WeiWang,SongfangHuang,andFeiHuang. RRHF:
+Rankresponsestoalignlanguagemodelswithhumanfeedbackwithouttears. arXivpreprint
+arXiv:2304.05302,2023.
+[5] WenhaoLiu,XiaohuaWang,MulingWu,TianlongLi,ChangzeLv,ZixuanLing,JianhaoZhu,
+CenyuanZhang,XiaoqingZheng,andXuanjingHuang. Aligninglargelanguagemodelswith
+humanpreferencesthroughrepresentationengineering. arXivpreprintarXiv:2312.15997,2023.
+[6] YunfanGao,YunXiong,XinyuGao,KangxiangJia,JinliuPan,YuxiBi,YiDai,JiaweiSun,
+andHaofenWang. Retrieval-augmentedgenerationforlargelanguagemodels: Asurvey. arXiv
+preprintarXiv:2312.10997,2023.
+[7] HuayangLi,YixuanSu,DengCai,YanWang,andLemaoLiu.Asurveyonretrieval-augmented
+textgeneration. arXivpreprintarXiv:2202.01110,2022.
+[8] DengCai,YanWang,LemaoLiu,andShumingShi. Recentadvancesinretrieval-augmented
+textgeneration. InProceedingsofthe45thinternationalACMSIGIRconferenceonresearch
+anddevelopmentininformationretrieval,pages3417–3419,2022.
+[9] Xinbei Ma, Yeyun Gong, Pengcheng He, Hai Zhao, and Nan Duan. Query rewriting for
+retrieval-augmentedlargelanguagemodels. arXivpreprintarXiv:2305.14283,2023.
+[10] Luyu Gao, Xueguang Ma, Jimmy Lin, and Jamie Callan. Precise zero-shot dense retrieval
+withoutrelevancelabels. arXivpreprintarXiv:2212.10496,2022.
+[11] LiangWang,NanYang,XiaolongHuang,BinxingJiao,LinjunYang,DaxinJiang,Rangan
+Majumder, and Furu Wei. Text embeddings by weakly-supervised contrastive pre-training.
+arXivpreprintarXiv:2212.03533,2022.
+[12] ShitaoXiao,ZhengLiu,PeitianZhang,andNiklasMuennighoff. C-pack: Packagedresources
+toadvancegeneralchineseembedding,2023.
+14[13] OpenAI. GPT-4technicalreport. CoRR,abs/2303.08774,2023. doi: 10.48550/ARXIV.2303.
+08774. URLhttps://doi.org/10.48550/arXiv.2303.08774.
+[14] HugoTouvron,ThibautLavril,GautierIzacard,XavierMartinet,Marie-AnneLachaux,Timo-
+théeLacroix,BaptisteRozière,NamanGoyal,EricHambro,FaisalAzhar,etal. LLaMA:Open
+andefficientfoundationlanguagemodels. arXivpreprintarXiv:2302.13971,2023.
+[15] YueZhang,YafuLi,LeyangCui,DengCai,LemaoLiu,TingchenFu,XintingHuang,Enbo
+Zhao,YuZhang,YulongChen,etal. Siren’ssongintheaiocean: asurveyonhallucinationin
+largelanguagemodels. arXivpreprintarXiv:2309.01219,2023.
+[16] XiaohuaWang,YuliangYan,LongtaoHuang,XiaoqingZheng,andXuan-JingHuang. Halluci-
+nationdetectionforgenerativelargelanguagemodelsbybayesiansequentialestimation. In
+Proceedingsofthe2023ConferenceonEmpiricalMethodsinNaturalLanguageProcessing,
+pages15361–15371,2023.
+[17] Liang Wang, Nan Yang, and Furu Wei. Query2doc: Query expansion with large language
+models. arXivpreprintarXiv:2303.07678,2023.
+[18] GangwooKim,SungdongKim,ByeonggukJeon,JoonsukPark,andJaewooKang. Treeof
+clarifications: Answeringambiguousquestionswithretrieval-augmentedlargelanguagemodels.
+arXivpreprintarXiv:2310.14696,2023.
+[19] JerryLiu. LlamaIndex,112022. URLhttps://github.com/jerryjliu/llama_index.
+[20] PeitianZhang,ShitaoXiao,ZhengLiu,ZhichengDou,andJian-YunNie. Retrieveanythingto
+augmentlargelanguagemodels. arXivpreprintarXiv:2310.07554,2023.
+[21] Zehan Li, Xin Zhang, Yanzhao Zhang, Dingkun Long, Pengjun Xie, and Meishan Zhang.
+Towards general text embeddings with multi-stage contrastive learning. arXiv preprint
+arXiv:2308.03281,2023.
+[22] Huiqiang Jiang, Qianhui Wu, Chin-Yew Lin, Yuqing Yang, and Lili Qiu. Llmlingua:
+Compressing prompts for accelerated inference of large language models. arXiv preprint
+arXiv:2310.05736,2023.
+[23] FangyuanXu,WeijiaShi,andEunsolChoi. Recomp: Improvingretrieval-augmentedlmswith
+compressionandselectiveaugmentation. arXivpreprintarXiv:2310.04408,2023.
+[24] ZhiruoWang,JunAraki,ZhengbaoJiang,MdRizwanParvez,andGrahamNeubig. Learning
+tofiltercontextforretrieval-augmentedgeneration. arXivpreprintarXiv:2311.08377,2023.
+[25] RodrigoNogueira,WeiYang,KyunghyunCho,andJimmyLin. Multi-stagedocumentranking
+withbert. arXivpreprintarXiv:1910.14424,2019.
+[26] Rodrigo Nogueira, Zhiying Jiang, and Jimmy Lin. Document ranking with a pretrained
+sequence-to-sequencemodel. arXivpreprintarXiv:2003.06713,2020.
+[27] Xueguang Ma, Liang Wang, Nan Yang, Furu Wei, and Jimmy Lin. Fine-tuning llama for
+multi-stagetextretrieval. arXivpreprintarXiv:2310.08319,2023.
+[28] ShengyaoZhuangandGuidoZuccon. Tilde: Termindependentlikelihoodmodelforpassage
+re-ranking. InProceedingsofthe44thInternationalACMSIGIRConferenceonResearchand
+DevelopmentinInformationRetrieval,pages1483–1492,2021.
+[29] ShengyaoZhuangandGuidoZuccon. Fastpassagere-rankingwithcontextualizedexactterm
+matchingandefficientpassageexpansion. arXivpreprintarXiv:2108.08513,2021.
+[30] HongyinLuo,Yung-SungChuang,YuanGong,TianhuaZhang,YoonKim,XixinWu,Danny
+Fox, Helen M. Meng, and James R. Glass. Sail: Search-augmented instruction learning.
+In Conference on Empirical Methods in Natural Language Processing, 2023. URL https:
+//api.semanticscholar.org/CorpusID:258865283.
+15[31] Tianjun Zhang, Shishir G. Patil, Naman Jain, Sheng Shen, Matei A. Zaharia, Ion Stoica,
+and Joseph E. Gonzalez. Raft: Adapting language model to domain specific rag. ArXiv,
+abs/2403.10131,2024.
+[32] ZihanLiu,WeiPing,RajarshiRoy,PengXu,ChankyuLee,MohammadShoeybi,andBryan
+Catanzaro. Chatqa: Surpassing gpt-4 on conversational qa and rag. 2024. URL https:
+//api.semanticscholar.org/CorpusID:267035133.
+[33] GautierIzacard,PatrickLewis,MariaLomeli,LucasHosseini,FabioPetroni,TimoSchick,
+Jane A. Yu, Armand Joulin, Sebastian Riedel, and Edouard Grave. Few-shot learning with
+retrievalaugmentedlanguagemodels. ArXiv,abs/2208.03299,2022.
+[34] LingxiZhang,YueYu,KuanWang,andChaoZhang. Arl2: Aligningretrieversforblack-box
+large language models via self-guided adaptive relevance labeling. ArXiv, abs/2402.13542,
+2024.
+[35] WeijiaShi,SewonMin,MichihiroYasunaga,MinjoonSeo,RichJames,MikeLewis,Luke
+Zettlemoyer,andWen-tauYih. Replug:Retrieval-augmentedblack-boxlanguagemodels. arXiv
+preprintarXiv:2301.12652,2023.
+[36] Kelvin Guu, Kenton Lee, Zora Tung, Panupong Pasupat, and Ming-Wei Chang. Realm:
+Retrieval-augmentedlanguagemodelpre-training. ArXiv,abs/2002.08909,2020.
+[37] Xi Victoria Lin, Xilun Chen, Mingda Chen, Weijia Shi, Maria Lomeli, Rich James, Pedro
+Rodriguez, Jacob Kahn, Gergely Szilvasy, Mike Lewis, Luke Zettlemoyer, and Scott Yih.
+Ra-dit: Retrieval-augmenteddualinstructiontuning. ArXiv,abs/2310.01352,2023.
+[38] HamedZamaniandMichaelBendersky. Stochasticrag: End-to-endretrieval-augmentedgen-
+erationthroughexpectedutilitymaximization. 2024. URLhttps://api.semanticscholar.
+org/CorpusID:269605438.
+[39] YizhengHuangandJimmyHuang. Asurveyonretrieval-augmentedtextgenerationforlarge
+languagemodels. arXivpreprintarXiv:2404.10981,2024.
+[40] Ruochen Zhao, Hailin Chen, Weishi Wang, Fangkai Jiao, Xuan Long Do, Chengwei Qin,
+BoshengDing,XiaobaoGuo,MinzhiLi,XingxuanLi,etal. Retrievingmultimodalinformation
+foraugmentedgeneration: Asurvey. arXivpreprintarXiv:2303.10868,2023.
+[41] PenghaoZhao,HailinZhang,QinhanYu,ZhengrenWang,YuntengGeng,FangchengFu,Ling
+Yang,WentaoZhang,andBinCui. Retrieval-augmentedgenerationforai-generatedcontent: A
+survey. arXivpreprintarXiv:2402.19473,2024.
+[42] MichaelGünther,JackminOng,IsabelleMohr,AlaeddineAbdessalem,TanguyAbel,Moham-
+madKalimAkram,SusanaGuzman,GeorgiosMastrapas,SabaSturua,BoWang,etal. Jina
+embeddings2:8192-tokengeneral-purposetextembeddingsforlongdocuments. arXivpreprint
+arXiv:2310.19923,2023.
+[43] LlamaIndex. Llamaindexwebsite. https://www.llamaindex.com. Accessed: 2024-06-08.
+[44] KunalSawarkar, AbhilashaMangal, andShivamRajSolanki. Blendedrag: Improvingrag
+(retriever-augmentedgeneration)accuracywithsemanticsearchandhybridquery-basedretriev-
+ers. arXivpreprintarXiv:2404.07220,2024.
+[45] GautierIzacard,MathildeCaron,LucasHosseini,SebastianRiedel,PiotrBojanowski,Armand
+Joulin,andEdouardGrave. Unsuperviseddenseinformationretrievalwithcontrastivelearning.
+arXivpreprintarXiv:2112.09118,2021.
+[46] NandanThakur,NilsReimers,AndreasRücklé,AbhishekSrivastava,andIrynaGurevych. Beir:
+A heterogenous benchmark for zero-shot evaluation of information retrieval models. arXiv
+preprintarXiv:2104.08663,2021.
+[47] PayalBajaj,DanielCampos,NickCraswell,LiDeng,JianfengGao,XiaodongLiu,Rangan
+Majumder, Andrew McNamara, Bhaskar Mitra, Tri Nguyen, et al. Ms marco: A human
+generatedmachinereadingcomprehensiondataset. arXivpreprintarXiv:1611.09268,2016.
+16[48] NelsonFLiu,KevinLin,JohnHewitt,AshwinParanjape,MicheleBevilacqua,FabioPetroni,
+andPercyLiang. Lostinthemiddle: Howlanguagemodelsuselongcontexts. Transactionsof
+theAssociationforComputationalLinguistics,12:157–173,2024.
+[49] HuiqiangJiang,QianhuiWu,XufangLuo,DongshengLi,Chin-YewLin,YuqingYang,and
+LiliQiu. Longllmlingua: Acceleratingandenhancingllmsinlongcontextscenariosviaprompt
+compression. arXivpreprintarXiv:2310.06839,2023.
+[50] HugoTouvron,LouisMartin,KevinR.Stone,PeterAlbert,AmjadAlmahairi,YasmineBabaei,
+NikolayBashlykov,SoumyaBatra,PrajjwalBhargava,ShrutiBhosale,DanielM.Bikel,Lukas
+Blecher,CristianCantónFerrer,MoyaChen,GuillemCucurull,DavidEsiobu,JudeFernandes,
+JeremyFu,WenyinFu,BrianFuller,CynthiaGao,VedanujGoswami,NamanGoyal,AnthonyS.
+Hartshorn, Saghar Hosseini, Rui Hou, Hakan Inan, Marcin Kardas, Viktor Kerkez, Madian
+Khabsa,IsabelM.Kloumann,A.V.Korenev,PunitSinghKoura,Marie-AnneLachaux,Thibaut
+Lavril,JenyaLee,DianaLiskovich,YinghaiLu,YuningMao,XavierMartinet,TodorMihaylov,
+PushkarMishra,IgorMolybog,YixinNie,AndrewPoulton,JeremyReizenstein,RashiRungta,
+KalyanSaladi,AlanSchelten,RuanSilva,EricMichaelSmith,R.Subramanian,XiaTan,Binh
+Tang,RossTaylor,AdinaWilliams,JianXiangKuan,PuxinXu,ZhengxuYan,IliyanZarov,
+YuchenZhang,AngelaFan,MelanieKambadur,SharanNarang,AurelienRodriguez,Robert
+Stojnic,SergeyEdunov,andThomasScialom. Llama2: Openfoundationandfine-tunedchat
+models. ArXiv,abs/2307.09288,2023.
+[51] ES Shahul, Jithin James, Luis Espinosa Anke, and Steven Schockaert. Ragas: Automated
+evaluationofretrievalaugmentedgeneration. InConferenceoftheEuropeanChapterofthe
+AssociationforComputationalLinguistics,2023. URLhttps://api.semanticscholar.org/
+CorpusID:263152733.
+[52] Harsh Trivedi, Niranjan Balasubramanian, Tushar Khot, and Ashish Sabharwal. Musique:
+Multihop questions via single-hop question composition. Transactions of the Association
+forComputationalLinguistics,page539–554,May2022. doi: 10.1162/tacl_a_00475. URL
+http://dx.doi.org/10.1162/tacl_a_00475.
+[53] Mike Conover, Matt Hayes, Ankit Mathur, Jianwei Xie, Jun Wan, Sam Shah, Ali Ghodsi,
+PatrickWendell,MateiZaharia,andReynoldXin. Freedolly: Introducingtheworld’sfirsttruly
+openinstruction-tunedllm,2023. URLhttps://www.databricks.com/blog/2023/04/12/
+dolly-first-open-commercially-viable-instruction-tuned-llm.
+[54] NickCraswell,BhaskarMitra,EmineYilmaz,DanielFernandoCampos,andEllenM.Voorhees.
+Overviewofthetrec2019deeplearningtrack. ArXiv,abs/2003.07820,2020. URLhttps:
+//api.semanticscholar.org/CorpusID:253234683.
+[55] NickCraswell,BhaskarMitra,EmineYilmaz,DanielFernandoCampos,andEllenM.Voorhees.
+Overviewofthetrec2020deeplearningtrack. ArXiv,abs/2102.07662,2021. URLhttps:
+//api.semanticscholar.org/CorpusID:212737158.
+[56] JimmyLin,XueguangMa,Sheng-ChiehLin,Jheng-HongYang,RonakPradeep,andRodrigo
+Nogueira. Pyserini: Apythontoolkitforreproducibleinformationretrievalresearchwithsparse
+anddenserepresentations. InProceedingsofthe44thInternationalACMSIGIRConferenceon
+ResearchandDevelopmentinInformationRetrieval,pages2356–2362,2021.
+[57] TomKwiatkowski,JennimariaPalomaki,OliviaRedfield,MichaelCollins,AnkurP.Parikh,
+ChrisAlberti,DanielleEpstein,IlliaPolosukhin,JacobDevlin,KentonLee,KristinaToutanova,
+LlionJones,MatthewKelcey,Ming-WeiChang,AndrewM.Dai,JakobUszkoreit,QuocV.Le,
+andSlavPetrov. Naturalquestions:Abenchmarkforquestionansweringresearch. Transactions
+oftheAssociationforComputationalLinguistics,7:453–466,2019.
+[58] MandarJoshi,EunsolChoi,DanielS.Weld,andLukeZettlemoyer. Triviaqa: Alargescale
+distantly supervised challenge dataset for reading comprehension. ArXiv, abs/1705.03551,
+2017.
+[59] ZhilinYang,PengQi,SaizhengZhang,YoshuaBengio,WilliamWCohen,RuslanSalakhut-
+dinov,andChristopherDManning. Hotpotqa: Adatasetfordiverse,explainablemulti-hop
+questionanswering. arXivpreprintarXiv:1809.09600,2018.
+17[60] IvanStelmakh,YiLuan,BhuwanDhingra,andMing-WeiChang. Asqa: Factoidquestionsmeet
+long-formanswers. ArXiv,abs/2204.06092,2022.
+[61] TomášKocˇisky`,JonathanSchwarz,PhilBlunsom,ChrisDyer,KarlMoritzHermann,Gábor
+Melis,andEdwardGrefenstette. Thenarrativeqareadingcomprehensionchallenge. Transac-
+tionsoftheAssociationforComputationalLinguistics,6:317–328,2018.
+[62] PranavRajpurkar,JianZhang,KonstantinLopyrev,andPercyLiang.Squad:100,000+questions
+formachinecomprehensionoftext. arXivpreprintarXiv:1606.05250,2016.
+[63] StephanieLin, JacobHilton, andOwainEvans. Truthfulqa: Measuringhowmodelsmimic
+humanfalsehoods. arXivpreprintarXiv:2109.07958,2021.
+[64] J.EdwardHu,YelongShen,PhillipWallis,ZeyuanAllen-Zhu,YuanzhiLi,SheanWang,and
+WeizhuChen. Lora: Low-rankadaptationoflargelanguagemodels. ArXiv,abs/2106.09685,
+2021.
+[65] DanHendrycks,CollinBurns,StevenBasart,AndyZou,MantasMazeika,DawnSong,and
+JacobSteinhardt. Measuringmassivemultitasklanguageunderstanding. CornellUniversity-
+arXiv,CornellUniversity-arXiv,Sep2020.
+[66] PeterClark,IsaacCowhey,OrenEtzioni,TusharKhot,AshishSabharwal,CarissaSchoenick,
+andOyvindTafjord. Thinkyouhavesolvedquestionanswering? tryarc,theai2reasoningchal-
+lenge. ArXiv,abs/1803.05457,2018. URLhttps://api.semanticscholar.org/CorpusID:
+3922816.
+[67] Todor Mihaylov, Peter Clark, Tushar Khot, and Ashish Sabharwal. Can a suit of armor
+conduct electricity? a new dataset for open book question answering. In Proceedings of
+the2018ConferenceonEmpiricalMethodsinNaturalLanguageProcessing,Jan2018. doi:
+10.18653/v1/d18-1260. URLhttp://dx.doi.org/10.18653/v1/d18-1260.
+[68] James Thorne, Andreas Vlachos, Christos Christodoulopoulos, and Arpit Mittal. Fever: a
+large-scale dataset for fact extraction and verification. ArXiv, abs/1803.05355, 2018. URL
+https://api.semanticscholar.org/CorpusID:4711425.
+[69] Tianhua Zhang, Hongyin Luo, Yung-Sung Chuang, Wei Fang, Luc Gaitskell, Thomas
+Hartvigsen,XixinWu,DannyFox,HelenM.Meng,andJamesR.Glass. Interpretableunified
+language checking. ArXiv, abs/2304.03728, 2023. URL https://api.semanticscholar.
+org/CorpusID:258041307.
+[70] JonathanBerant,AndrewChou,RoyFrostig,andPercyLiang. Semanticparsingonfreebase
+fromquestion-answerpairs. EmpiricalMethodsinNaturalLanguageProcessing,Empirical
+MethodsinNaturalLanguageProcessing,Oct2013.
+[71] Xanh Ho, A. Nguyen, Saku Sugawara, and Akiko Aizawa. Constructing a multi-hop qa
+datasetforcomprehensiveevaluationofreasoningsteps. ArXiv,abs/2011.01060,2020. URL
+https://api.semanticscholar.org/CorpusID:226236740.
+[72] Ofir Press, Muru Zhang, Sewon Min, Ludwig Schmidt, NoahA. Smith, and Mike Lewis.
+Measuringandnarrowingthecompositionalitygapinlanguagemodels. Oct2022.
+[73] QiaoJin,BhuwanDhingra,ZhengpingLiu,WilliamW.Cohen,andXinghuaLu. Pubmedqa: A
+datasetforbiomedicalresearchquestionanswering. InConferenceonEmpiricalMethodsin
+NaturalLanguageProcessing,2019. URLhttps://api.semanticscholar.org/CorpusID:
+202572622.
+[74] AkariAsai,ZeqiuWu,YizhongWang,AvirupSil,andHannanehHajishirzi. Self-rag: Learning
+toretrieve, generate, andcritiquethroughself-reflection. arXivpreprintarXiv:2310.11511,
+2023.
+18A ExperimentalDetails
+Inthissection,weprovidedetailedexperimentalsettingsforeachmodule,coveringdatasetspecifics,
+trainingparameters,andanyadditionalexperimentalresults.
+A.1 QueryClassification
+Datasets WeutilizedasubsetoftheDatabricks-Dolly-15K[53]andgeneratedadditionaldata
+usingGPT-4.TheprompttemplateforgeneratingquestionsisshowninTable14.
+ImplementationDetails WechooseBERT-base-multilingual-casedasourclassifier,withabatch
+sizeof16andalearningrateof1e-5. TheevaluationofresultsisshowcasedinTable1.
+A.2 ExperimentalDetailsofRetrievalMethods
+Implementationdetailsofthecomparativeexperimentsofdifferentretrievalmethodsareasbelow:
+Datasets WeusetheTRECDL2019[54]and2020[55]passagerankingdatasetstoevaluatethe
+performanceofdifferentretrievalmethods.
+Metrics Widely-usedevaluationmetricsforretrievalincludemAP,nDCG@10,R@50andR@1k.
+BothmAPandnDCG@10areorder-awaremetricsthattaketherankingofsearchresultsintoaccount.
+Incontrast,R@kisanorder-unawaremetric. Wealsoreporttheaveragelatencyincurredbyeach
+methodperquery.
+ImplementationDetails Forsparseretrieval,weusetheBM25algorithm,whichreliesontheTF-
+IDFalgorithm.Fordenseretrieval,weemployContrieverasourunsupervisedcontrastivetextencoder.
+Basedonourevaluationofembeddingmodels,weimplementoursuperviseddenseretrievalusing
+LLM-Embedder. WeusethedefaultimplementationofBM25andContrieverfromPyserini[56].
+TheBM25indexisconstructedusingLuceneonMSMARCOcollections,whilethedensevector
+indexisgeneratedwithFaissemployingFlatconfigurationonthesamedataset. Forqueryrewriting,
+wepromptZephyr-7b-alpha9,amodeltrainedtoactasahelpfulassistant,torewritetheoriginal
+query. Forquerydecomposition,weemployGPT-3.5-turbo-0125tobreakdowntheoriginalquery
+intomultiplesub-queries. WecloselyfollowtheimplementationfromHyDE[10],utilizingthemore
+advancedinstruction-followinglanguagemodel,GPT-3.5-turbo-instruct,togeneratehypothetical
+answers. Themodelinferswithadefaulttemperatureof0.7, samplinguptoamaximumof512
+tokens. RetrievalexperimentsandevaluationareconductedusingthePyserinitoolkit.
+A.3 ExperimentalDetailsofRerankingMethods
+Datasets OurexperimentsutilizetheMSMARCOPassagerankingdataset,asubstantialcorpus
+designedformachinereadingcomprehensiontasks. Thisdatasetcomprisesover8.8millionpassages
+and1millionqueries. Thetrainingsetcontainsapproximately398Mtuplesofqueriespairedwith
+correspondingpositiveandnegativepassages,whilethedevelopmentsetcomprises6,980queries,
+pairedwiththeirBM25retrievalresults,andpreservesthetop-1000rankedcandidatepassagesfor
+eachquery. Weevaluatetheeffectivenessofthemethodsonthedevelopmentset,asthetestsetisnot
+publiclyavailable.
+Metrics The evaluation metrics MRR@1, MRR@10, MRR@1k and Hit Rate@10 are used.
+MRR@10istheofficialmetricproposedbyMSMARCO.
+ImplementationDetails Wefollowandmakemodificationstotheimplementationprovidedby
+PyGaggle[26]andTILDE[28]. ForDLM-basedreranking,weusemonoT5[26]basedonT5-base,
+monoBERT[25]basedonBERT-largeandRankLLaMA[27]basedonLlama-2-7b. ForTILDE
+reranking,weuseTILDEv2[29]basedonBERT-base.
+Typically,50documentsareretrievedasinputforthererankingmodule. Thedocumentsremaining
+afterthererankingandrepackingphasecanbefurtherconcentratedbyassigningatop-kvalueora
+relevancyscorethreshold.
+ResultAnalysis RerankingresultsareshowninTable9. Wecompareourresultswitharandomly
+shuffledorderingandtheBM25retrievalbaseline. Allrerankingmethodsdemonstrateanotable
+9https://huggingface.co/HuggingFaceH4/zephyr-7b-alpha
+19Context Model NQ TriviaQA HotpotQA ASQA Avg.
+M 29.78 60.44 23.73 37.89 37.96
+b
+M 26.23 58.26 26.67 32.30 35.87
+g
+D ∅ M r 31.10 61.37 28.40 39.96 40.21
+M 25.92 57.62 26.43 32.99 35.70
+gr
+M 26.69 58.07 27.04 33.75 36.39
+gg
+M 44.78 79.90 56.72 71.64 63.26
+b
+M 85.72 88.16 79.82 85.51 84.80
+g
+D g M r 60.98 80.20 65.73 67.49 68.60
+M 87.60 87.94 81.07 87.58 86.05
+gr
+M 86.72 88.35 79.59 83.44 84.53
+gg
+M 16.49 50.03 21.57 28.79 29.22
+b
+M 22.15 46.98 24.36 29.40 30.72
+g
+D r M r 36.92 58.42 29.64 39.54 41.13
+M 23.63 45.01 24.17 27.95 30.19
+gr
+M 21.08 43.83 23.23 27.33 28.87
+gg
+M 34.65 81.27 52.75 65.42 58.52
+b
+M 85.00 87.33 78.18 83.02 83.38
+g
+D gr M r 60.28 79.32 63.82 67.29 67.68
+M 87.63 87.14 79.95 87.78 85.63
+gr
+M 86.31 86.90 78.10 83.85 83.79
+gg
+Table12: ResultsofthemodelaugmentedwithdifferentcontextsonvariousQAdatasets.
+increaseinperformanceacrossallmetrics. ApproximatelyequalperformanceisachievedbymonoT5
+andmonoBERT,andRankLLaMAperformsbest,eachascendinginlatency. TILDEv2isthefastest,
+taking approximately 10 to 20 milliseconds per query at the cost of performance. Additionally,
+TILDEv2 requires that the passages reranked be identically included in the previously indexed
+collection.Preprocessingmustberedoneatinferencefornewunseenpassages,negatingtheefficiency
+advantages.
+A.4 ExperimentalDetailsofSummarizationMethods
+Selective Context Selective Context enhances LLM efficiency by identifying and removing
+redundantinformationintheinputcontext. Itevaluatestheinformativenessoflexicalunitsusing
+self-information computed by a base causal language model. This method is non-query-based,
+allowingacomparisonbetweenquery-basedandnon-query-basedapproaches.
+Datasets We evaluated these methods on three datasets: Natural Questions (NQ) [57], Trivi-
+aQA[58],andHotpotQA[59].
+Metrics EvaluationmetricsincludetheF1scoreandthenumberoftokenschangedaftersumma-
+rizationtomeasureconciseness.
+Implementation Details For all methods, we use Llama3-8B-Instruct as the generator model
+and set a summarization ratio of 0.4. For extractive methods, importance scores determine the
+sentencesretained. Forabstractivemethods,wecontrolthemaximumgenerationlengthusingthe
+summarizationratiotoalignwithextractivemethods. ExperimentsareconductedontheNQtestset,
+TriviaQAtestset,andHotpotQAdevelopmentset.
+A.5 ExperimentalDetailsofGeneratorFine-tuning
+Datasets Wefine-tuneourmodelonseveralquestionanswering(QA)andreadingcomprehension
+datasets,includingASQA[60],HotpotQA[59],NarrativeQA[61],NQ[57],SQuAD[62],Trivi-
+aQA[58],TruthfulQA[63]. Weusetheirtrainsplits(forthosecontainingsignificantlymoredata
+20[Instruction] Pleasegeneratetendescriptionsforthecontinuationtask.
+[Context] Forexample:
+1.“French.WashingtonplayedacrucialroleintheAmericanRevolutionaryWar,leading
+theContinentalArmyagainsttheBritish.”Pleasecontinuewritingtheaboveparagraph.
+2.“ThediscoveryofthedoublehelixstructureofDNAbyJamesWatsonandFrancis
+Crickrevolutionizedthefieldofgenetics,layingthefoundationformodernmolecular
+biology and biotechnology.” Please continue by discussing recent developments in
+geneticresearch,suchasCRISPRgeneediting,andtheirpotentialethicalimplications.
+Table14: Templateforgeneratingtaskclassificationdata.
+entriesthanothers,weconductedarandomsample). Forevaluation,ASQA[60],HotpotQA[59],
+NQ[57],TriviaQA[58]areused. Weevaluateourmodelontheirvalidationsplitsormanuallysplita
+subsetfromthetrainingsettoavoidoverlapping.
+The exact number of entries in each train and Dataset #Train #Eval
+testsetisdetailedinTable13. ASQA 2,090 483
+HotpotQA 15,000 7,405
+Weusethedataset-provideddocumentsasd
+gold TriviaQA 9,000 6,368
+foreachdataentry. Toobtaind wesam-
+random NQ 15,000 8,006
+ple the context of different entries within the
+NarrativeQA 7,000 −−
+samedataset,tomakesurethedistributionsof SQuAD 67,00 −−
+d randomandd goldareroughlysimilar. TruthfulQA 817 −−
+Metrics We use the ground-truth coverage
+Table 13: Number of examples in each Dataset
+as our evaluation metric, considering that the
+usedinthefine-tuningexperiments.
+answersofQAtasksarerelativelyshort,while
+thegenerationlengthofthemodelissometimeshardtolimit.
+ImplementationDetails WeselectLlama-2-7b[50]asthebasemodel. Forefficiency,weuse
+LoRA[64]andint8quantizationduringtraining. Theprompttemplatesusedforfine-tuningand
+evaluation mainly follow Lin et al. [37]. We train our generator for 3 epochs and constrain the
+maximumlengthofthesequenceto1600,usingabatchsizeof4andalearningrateof5e-5. During
+testing,weuseazero-shotsetting.
+DetailedResults Table12showsourevaluationresultsoneachdataset.
+A.6 ExperimentalDetailsofComprehensiveEvaluation
+TasksandDatasets WeconductedextensiveexperimentsacrossvariousNLPtasksanddatasetsto
+assesstheperformanceofRAGsystems. Specifically: (1)CommonsenseReasoning: Weevaluated
+onMMLU[65],ARC-Challenge[66],andOpenbookQA[67]datasets. (2)FactChecking: Our
+evaluation encompassed the FEVER [68] and PubHealth [69] datasets. (3) Open-Domain QA:
+We assessed on NQ [57], TriviaQA [58], and WebQuestions [70] datasets. (4) MultiHop QA:
+OurevaluationincludedtheHotPotQA[59],2WikiMultiHopQA[71],andMuSiQue[52]datasets.
+ForMuSiQue,wefollowedtheapproachoutlinedin[72]andfocusedsolelyonanswerable2-hop
+questions. (5)MedicalQA:WealsoassessedonthePubMedQA[73]dataset. Ineachdataset,we
+randomlysub-sample500entriesfromthetestsetforourexperiments. Fordatasetswithouttestset,
+weusedevelopsetinstead.
+ToassessRAGcapabilities,weevenlycollectatotalof500entriesfromNQ,TriviaQA,HotPotQA,
+2WikiMultiHopQAandMuSiQue. Eachentryisa“question,golddocument,goldanswer”triple.
+Metrics Weusetoken-levelF1scoreandEMscoreforOpen-DomainQAandMultiHopQAtasks,
+andaccuracyforothers. WeuseamorelenientEMscore,whichevaluatesperformancebasedon
+whetherthemodelgenerationsincludegoldanswersinsteadofstrictlyexactmatching[74].
+TowardsRAGcapabilitiesevaluation,weadoptfourmetricsfromRAGAs,includingFaithfulness,
+ContextRelevancy, AnswerRelevancy, andAnswerCorrectness. Faithfulnessmeasureshow
+factually consistent the generated answer is with the retrieved context. An answer is considered
+faithfulifallclaimsmadecanbedirectlyinferredfromtheprovidedcontext. ContextRelevancy
+evaluateshowrelevanttheretrievedcontextistotheoriginalquery. AnswerRelevancyassessesthe
+21pertinenceofthegeneratedanswertotheoriginalquery. AnswerCorrectnessinvolvestheaccuracy
+ofthegeneratedanswerwhencomparedtothegroundtruth. Forexample,ContextRelevancyis
+calculatedfromtheproportionofsentenceswithintheretrievedcontextthatarerelevantforanswering
+thegivenquestiontoallsentences:
+|S|
+contextrelevancy = (2)
+|Total|
+where|S|denotesthenumberofrelevantsentences,|Total|denotesthetotalnumberofsentences
+retrieved. AllthesemetricsareevaluatedusingtheRAGAsframework,withGPT-4servingasthe
+judge.
+Additionally,wecomputethecosinesimilaritybetweentheretrieveddocumentandthegolddocument
+as Retrieval Similarity. The retrieved document and gold document are fed into an embedding
+model,thentheresultingembeddingsareusedtocomputethecosinesimilarity.
+ImplementationDetails ForOpen-DomainQAandMultiHopQAdatasets,wesetthegeneration
+model’smaximumnewtokennumberto100tokens. Forotherdatasets,wesetitto50tokens. To
+dealwithexcessivelylongretrieveddocuments,wetruncatedthedocumentsto2048wordswhen
+evaluatingRankLLaMAandLongLLMLingua.
+Foralldatasets,weusegreedydecodingduringgeneration. Tobettercomparethecapabilitiesof
+different RAG modules, we adopt the 0-shot evaluation setting, i.e., no in-context examples are
+offered. Inthemultiplechoiceandfactcheckingtasks,answersgeneratedbythemodelmaytake
+avarietyofforms(e.g.,“theanswerisA”insteadof“A”).Therefore,wepreprocesstheresponses
+generatedbythemodel,applyingregularexpressiontemplatestomatchthemwithgoldlabels.
+22
